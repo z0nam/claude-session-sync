@@ -1,0 +1,20 @@
+[Unit]
+Description=Claude Code Remote Control (user)
+Documentation=https://docs.claude.com/en/docs/claude-code/remote-control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Default config lives at ~/.config/claude-remote.env. Override by setting
+# CLAUDE_REMOTE_ENV_FILE in the environment before `systemctl --user start`.
+Environment=CLAUDE_REMOTE_ENV_FILE=%h/.config/claude-remote.env
+ExecStart=%h/.local/bin/claude-remote
+Restart=on-failure
+RestartSec=10s
+# Keep the launcher's stdout/stderr in the journal: `journalctl --user -u claude-remote`.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

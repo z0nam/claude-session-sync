@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# claude-remote: thin launcher around `claude remote-control`.
+#
+# - Verifies the `claude` CLI is installed and recent enough.
+# - Sources ~/.config/claude-remote.env if present (for service units).
+# - cd's into $CLAUDE_REMOTE_DIR if set.
+# - Picks a default --name of "<hostname>-<dirname>" when the caller didn't
+#   provide one. Every other argument is passed through unchanged.
+
+set -euo pipefail
+
+MIN_VERSION="2.1.51"
+ENV_FILE="${CLAUDE_REMOTE_ENV_FILE:-$HOME/.config/claude-remote.env}"
+
+die() {
+    printf 'claude-remote: %s\n' "$*" >&2
+    exit 1
+}
+
+if [ -f "$ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    set -a; . "$ENV_FILE"; set +a
+fi
+
+if [ -n "${CLAUDE_REMOTE_DIR:-}" ]; then
+    [ -d "$CLAUDE_REMOTE_DIR" ] || die "CLAUDE_REMOTE_DIR='$CLAUDE_REMOTE_DIR' is not a directory"
+    cd "$CLAUDE_REMOTE_DIR"
+fi
+
+CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+command -v "$CLAUDE_BIN" >/dev/null 2>&1 \
+    || die "'$CLAUDE_BIN' not found in PATH. Install Claude Code first."
+
+raw_version="$("$CLAUDE_BIN" --version 2>/dev/null || true)"
+current_version="$(printf '%s\n' "$raw_version" | awk 'NR==1 {print $1; exit}')"
+[ -n "$current_version" ] || die "could not parse 'claude --version' output: '$raw_version'"
+
+# Portable semver compare: lowest of (current, MIN_VERSION) under `sort -V`
+# must be MIN_VERSION, otherwise current is older.
+lowest="$(printf '%s\n%s\n' "$MIN_VERSION" "$current_version" | sort -V | head -n1)"
+if [ "$lowest" != "$MIN_VERSION" ] && [ "$current_version" != "$MIN_VERSION" ]; then
+    die "Remote Control needs claude >= $MIN_VERSION (found $current_version)"
+fi
+
+# If the caller didn't pass --name, default to "<host>-<dirname>".
+has_name=0
+for arg in "$@"; do
+    case "$arg" in
+        --name|--name=*) has_name=1; break ;;
+    esac
+done
+
+if [ "$has_name" -eq 0 ]; then
+    host="$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
+    dirname="$(basename "$PWD")"
+    set -- --name "${host}-${dirname}" "$@"
+fi
+
+exec "$CLAUDE_BIN" remote-control "$@"
