@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent for `claude-remote`. Install to:
+    ~/Library/LaunchAgents/com.anthropic.claude-remote.plist
+
+  Then load with:
+    launchctl load -w ~/Library/LaunchAgents/com.anthropic.claude-remote.plist
+
+  Replace YOUR_USERNAME below before installing (LaunchAgents do not expand
+  $HOME). The setup doc shows a `sed` one-liner that does this automatically.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.anthropic.claude-remote</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/.local/bin/claude-remote</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CLAUDE_REMOTE_ENV_FILE</key>
+        <string>/Users/YOUR_USERNAME/.config/claude-remote.env</string>
+        <key>PATH</key>
+        <string>/Users/YOUR_USERNAME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/claude-remote.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/claude-remote.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

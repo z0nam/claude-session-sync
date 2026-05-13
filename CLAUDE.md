@@ -1,37 +1,91 @@
 # Context for future Claude sessions
 
-This file captures the conversation that motivated this project so a future Claude session can pick up cold.
+This file captures why this project exists in its current form so a future
+Claude session can pick up cold.
 
-## Origin
+## Origin (what we set out to solve)
 
-The project was started during a Claude Code on the web session that was working on an unrelated repo (`z0nam/Namun_Cho_CV`). The user noticed:
+The repo was created during a Claude Code on the web session. The user had
+noticed that:
 
-1. Sessions running locally in VS Code (Claude Code extension) were **not visible** from the web environment.
-2. Sessions started in the Claude Code desktop app **were visible** in the local VS Code extension.
-3. They wanted to know how to make all sessions visible everywhere.
+1. Sessions running locally (VS Code extension, desktop app, terminal CLI)
+   were **not visible** from the web environment.
+2. Sessions started in the desktop app **were visible** in the local VS Code
+   extension (they share `~/.claude/projects/*.jsonl`).
+3. The web environment (`claude.ai/code`) runs in an Anthropic-managed cloud
+   sandbox, with its own session storage in the cloud and no exposure to the
+   user's filesystem.
 
-## What we established
+Original framing: build a tool that exports local JSONL session files and
+pushes them somewhere the web sandbox can `git clone` to recover prior
+context. See git history for the bootstrap README/docs that reflected that
+plan.
 
-- Local Claude Code surfaces (VS Code extension, desktop app, terminal CLI) all read/write the same on-disk store: `~/.claude/projects/<encoded-project-path>/*.jsonl`. The encoding replaces `/` in the absolute project path with `-` (e.g. `/home/user/Namun_Cho_CV` → `-home-user-Namun-Cho-CV`).
-- The web environment (`claude.ai/code`) runs in a fresh Anthropic-managed sandbox VM. Its session storage is in the cloud and is not reachable from the user's machine.
-- Therefore: local-to-local sharing is automatic; local-to-web (or web-to-local) sharing is **not supported by Claude Code today**.
-- There is no built-in setting or CLI flag to enable cross-environment sync. This is an architectural gap, not a configuration issue.
+## The pivot
 
-## Why a separate project
+Anthropic shipped **Remote Control** in Claude Code v2.1.51 (announced 2026).
+Remote Control lets a Claude Code session running locally be **driven** from
+`claude.ai/code` or the Claude mobile app:
 
-The Namun_Cho_CV repo is a personal CV; mixing a tooling experiment into it would be off-topic. The user asked to spin this off into its own project, develop a real sync tool, and preserve the above context so the next session does not have to re-derive it.
+- The session keeps running on the user's machine — local FS, MCP servers,
+  tools, and project config all stay live.
+- The web/mobile UI is just a window into that local session.
+- Transport is outbound HTTPS only; no inbound listener on the machine.
 
-## Constraints observed during bootstrap
+That solves the user's actual underlying need ("continue my local work from
+my phone / a browser") more cleanly than any sync tool could, because no
+history has to move. So the repo was redirected: instead of inventing a
+sync protocol, this project now ships a thin launcher + a long-running
+service unit that makes Remote Control trivial to keep on.
 
-- The web session's GitHub MCP scope was originally limited to `z0nam/namun_cho_cv`. The user manually created `git@github.com:z0nam/claude-session-sync.git` and provided the URL; the bootstrap commit was pushed to that remote.
+What Remote Control does **not** solve (and this repo deliberately does not
+attempt):
 
-## What to do next
+- It is not an archive. If the local process exits, the session ends. Past
+  JSONL conversations are not browsable from another device.
+- It is not bidirectional file sync. Web-only sessions still live in the
+  cloud sandbox and are not reachable from the local machine.
 
-When picking this project up:
+If those gaps ever matter, revisit the original sync idea — but build it as
+a separate tool, not in this repo.
 
-1. Inspect a real `~/.claude/projects/<encoded-path>/*.jsonl` file and document its line schema in `docs/session-storage.md`.
-2. Decide an export format (markdown for readability vs. JSON for fidelity — likely both, with markdown as the default surface).
-3. Decide a sync target. The leading candidate is a user-owned GitHub repo (private), since the user can `git clone` it from a web sandbox to restore context.
-4. Sketch the CLI: at minimum `claude-sync export <session-id|--all>` and `claude-sync push`.
+## Current shape of the repo
 
-Do not assume any cloud-side API for web sessions exists; if you discover one, document it before relying on it.
+- `bin/claude-remote` — bash launcher around `claude remote-control`.
+  Sanity-checks the install, picks a sensible default session name, sources
+  `~/.config/claude-remote.env` if present, then `exec`s the real subcommand.
+- `systemd/claude-remote.service` + `claude-remote.env.example` — Linux user
+  unit for keeping it running across reboots.
+- `launchd/com.anthropic.claude-remote.plist` — macOS LaunchAgent equivalent.
+- `docs/setup.md` — install/uninstall steps.
+
+There is intentionally no daemon code, no client library, no parser. The
+official `claude` CLI does all the heavy lifting; this repo is glue.
+
+## Constraints worth remembering
+
+- The launcher should never invent flags. If `claude remote-control` adds or
+  renames a flag, users should be able to pass it through without waiting on
+  this repo. Pre-flight checks should stay limited to "is the CLI present
+  and recent enough"; behaviour is the upstream subcommand's responsibility.
+- The systemd unit runs as the user (`systemctl --user`). Do **not** suggest
+  a system-wide unit — Remote Control authenticates against a specific
+  user's claude.ai login and needs that user's keyring/credentials.
+- macOS LaunchAgents go in `~/Library/LaunchAgents`, run as the logged-in
+  user, and need `RunAtLoad` + `KeepAlive` to behave like the systemd unit.
+
+## Suggested next steps
+
+1. Validate the launcher against a real `claude --version` output on the
+   user's machine and adjust the version-extraction regex if needed. The
+   current implementation assumes the first whitespace-delimited token is a
+   semver.
+2. Decide whether to bundle a `claude-remote status` helper (e.g. parse
+   `systemctl --user is-active` and surface the session URL). Out of scope
+   for v0.1; worth doing once there is a second use case.
+3. Consider a `--dry-run` flag for the launcher that prints the exact
+   `claude remote-control` invocation it would run. Cheap to add, helpful
+   when debugging service units.
+
+Do not bring back the JSONL-export direction inside this repo. If that need
+re-emerges, spin a separate repo so the two concerns do not bleed.
