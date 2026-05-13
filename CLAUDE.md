@@ -58,6 +58,11 @@ a separate tool, not in this repo.
   unit for keeping it running across reboots.
 - `launchd/com.anthropic.claude-remote.plist` — macOS LaunchAgent equivalent.
 - `docs/setup.md` — install/uninstall steps.
+- `docs/reference/session-storage.md` — **reference only**, not part of the
+  toolkit. A one-time inspection record of the local `~/.claude/projects/*.jsonl`
+  layout, made during the original sync-tool exploration before the pivot.
+  Kept because the format is otherwise undocumented and re-deriving it is
+  not free. Do not build on top of it inside this repo (see closing note).
 
 There is intentionally no daemon code, no client library, no parser. The
 official `claude` CLI does all the heavy lifting; this repo is glue.
