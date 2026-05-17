@@ -132,6 +132,55 @@ rm ~/Library/LaunchAgents/com.anthropic.claude-remote.plist
 rm ~/.local/bin/claude-remote ~/.config/claude-remote.env
 ```
 
+## Windows (native)
+
+Windows PowerShell 5.1 (ships with Windows 10/11) is enough; PowerShell 7+
+also works. No admin rights required — the launcher and Task Scheduler
+entry are both user-scope.
+
+WSL users: don't follow this section. Inside WSL2 the Linux instructions
+above work as-is. A WSL session shows up in claude.ai/code as a separate
+machine from a native-Windows session (different hostnames, different
+filesystems). If you want both, run both setups.
+
+Open a normal PowerShell window in the cloned repo, then:
+
+```powershell
+# 1. Install the launcher
+$dest = "$env:USERPROFILE\.local\bin"
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+Copy-Item bin\claude-remote.ps1 "$dest\claude-remote.ps1"
+
+# 2. Configure defaults
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.config" | Out-Null
+Copy-Item systemd\claude-remote.env.example "$env:USERPROFILE\.config\claude-remote.env"
+notepad "$env:USERPROFILE\.config\claude-remote.env"
+# Set CLAUDE_REMOTE_DIR — e.g. "%USERPROFILE%\code\my-project".
+
+# 3. First-run consent (see the section above). In a normal PowerShell:
+cd $env:CLAUDE_REMOTE_DIR    # or your project dir
+& "$env:USERPROFILE\.local\bin\claude-remote.ps1"
+# Answer the two prompts. Press Ctrl+C once you see the session URL.
+
+# 4. Register the logon task
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install-task.ps1
+
+# 5. Start it now (or just log out / back in)
+Start-ScheduledTask -TaskName 'claude-remote' -TaskPath '\Claude\'
+
+# 6. Confirm it's running, and tail the log
+Get-ScheduledTaskInfo -TaskName 'claude-remote' -TaskPath '\Claude\'
+Get-Content -Wait "$env:LOCALAPPDATA\claude-remote\claude-remote.log"
+```
+
+### Uninstall (Windows)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\uninstall-task.ps1
+Remove-Item "$env:USERPROFILE\.local\bin\claude-remote.ps1"
+Remove-Item "$env:USERPROFILE\.config\claude-remote.env"
+```
+
 ## Connecting from another device
 
 Once the service is up, open [claude.ai/code](https://claude.ai/code) or the
@@ -159,6 +208,12 @@ that points the Claude app at this session.
   missing/expired login (`/login` again) and `CLAUDE_REMOTE_DIR`
   pointing at a path that doesn't exist or isn't workspace-trusted.
 - **No session in claude.ai/code** — confirm with `systemctl --user status
-  claude-remote` (Linux) or `launchctl list | grep claude-remote` (macOS).
-  Then check the journal/log for the session URL line; if it's there, the
-  problem is the browser side (wrong account, etc.), not the daemon.
+  claude-remote` (Linux), `launchctl list | grep claude-remote` (macOS), or
+  `Get-ScheduledTaskInfo -TaskName 'claude-remote' -TaskPath '\Claude\'`
+  (Windows). Then check the journal/log for the session URL line; if it's
+  there, the problem is the browser side (wrong account, etc.), not the
+  daemon.
+- **Windows task: `LastTaskResult` is non-zero / empty log** — the wrapper
+  cmd file may be missing or pointing at the wrong .ps1. Re-run
+  `windows\install-task.ps1`; it regenerates
+  `%LOCALAPPDATA%\claude-remote\run.cmd` from scratch.

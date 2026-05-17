@@ -54,9 +54,18 @@ a separate tool, not in this repo.
 - `bin/claude-remote` — bash launcher around `claude remote-control`.
   Sanity-checks the install, picks a sensible default session name, sources
   `~/.config/claude-remote.env` if present, then `exec`s the real subcommand.
+- `bin/claude-remote.ps1` — PowerShell port of the same launcher for native
+  Windows. Reads the same env file (POSIX `$HOME` and Windows `%VAR%` style
+  both expanded). Targets PowerShell 5.1+ so it runs on stock Windows 10/11
+  without installing PS 7.
 - `systemd/claude-remote.service` + `claude-remote.env.example` — Linux user
   unit for keeping it running across reboots.
 - `launchd/com.anthropic.claude-remote.plist` — macOS LaunchAgent equivalent.
+- `windows/install-task.ps1` / `windows/uninstall-task.ps1` — Windows
+  equivalent. Registers a per-user Task Scheduler logon task that calls a
+  tiny generated `run.cmd` wrapper, so stdout/stderr can be redirected to
+  `%LOCALAPPDATA%\claude-remote\claude-remote.log` without hand-quoting
+  redirection operators through Task Scheduler.
 - `docs/setup.md` — install/uninstall steps.
 - `docs/reference/session-storage.md` — **reference only**, not part of the
   toolkit. A one-time inspection record of the local `~/.claude/projects/*.jsonl`
@@ -78,6 +87,16 @@ official `claude` CLI does all the heavy lifting; this repo is glue.
   user's claude.ai login and needs that user's keyring/credentials.
 - macOS LaunchAgents go in `~/Library/LaunchAgents`, run as the logged-in
   user, and need `RunAtLoad` + `KeepAlive` to behave like the systemd unit.
+- Windows task is registered under `\Claude\claude-remote` with
+  `LogonType Interactive` and `RunLevel Limited`. Do **not** bump to
+  `RunLevel Highest` — Remote Control needs the user's normal keyring, not
+  an elevated session. Task path lives under `\Claude\` (not the root) so
+  it groups nicely in `taskschd.msc`.
+- WSL is intentionally not given its own helper. Inside WSL2 the Linux
+  bash launcher and systemd unit work unchanged; a WSL session shows up
+  in claude.ai/code as a different machine from the native-Windows
+  session, which is the correct behaviour (different hostnames, different
+  filesystems, different MCP server installs).
 
 ## Suggested next steps
 
