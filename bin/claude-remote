@@ -51,7 +51,7 @@ for arg in "$@"; do
 done
 
 if [ "$has_name" -eq 0 ]; then
-    host="$(hostname -s 2>/dev/null || hostname | cut -d. -f1)"
+    host="${CLAUDE_REMOTE_HOST:-$(hostname -s 2>/dev/null || hostname | cut -d. -f1)}"
     dirname="$(basename "$PWD")"
     set -- --name "${host}-${dirname}" "$@"
 fi
