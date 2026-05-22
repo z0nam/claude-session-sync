@@ -18,11 +18,15 @@ reachable from the Claude mobile app or `claude.ai/code` in a browser.
   - auto-derives a session name from `hostname` + project dir,
   - optionally sources `~/.config/claude-remote.env` for defaults,
   - forwards every other flag straight through to `claude remote-control`.
-- **`systemd/claude-remote.service`** — a user-scope systemd unit so the
+- **`bin/claude-remote.ps1`** — PowerShell port of the launcher for native
+  Windows. Same env-file format, same defaults.
+- **`systemd/claude-remote.service`** — user-scope systemd unit so the
   Remote Control server starts at login on Linux and restarts on failure.
 - **`launchd/com.anthropic.claude-remote.plist`** — equivalent LaunchAgent
   for macOS.
-- **`docs/setup.md`** — copy-paste install steps for both platforms.
+- **`windows/install-task.ps1`** / **`uninstall-task.ps1`** — register the
+  same idea as a per-user Task Scheduler logon task on Windows.
+- **`docs/setup.md`** — copy-paste install steps for all three platforms.
 
 ## Quick start
 
