@@ -158,9 +158,14 @@ notepad "$env:USERPROFILE\.config\claude-remote.env"
 # Set CLAUDE_REMOTE_DIR — e.g. "%USERPROFILE%\code\my-project".
 
 # 3. First-run consent (see the section above). In a normal PowerShell:
-cd $env:CLAUDE_REMOTE_DIR    # or your project dir
+cd "$env:USERPROFILE\projects"   # or whatever you set CLAUDE_REMOTE_DIR to
+claude                            # accept the workspace-trust dialog once, then /quit
 & "$env:USERPROFILE\.local\bin\claude-remote.ps1"
-# Answer the two prompts. Press Ctrl+C once you see the session URL.
+# Answer the consent prompt(s). Press Ctrl+C once you see the session URL.
+#
+# If the launcher prints "Workspace not trusted", you skipped the `claude`
+# step above — run `claude` in that directory once to accept trust, then
+# re-run the launcher.
 
 # 4. Register the logon task
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\install-task.ps1
