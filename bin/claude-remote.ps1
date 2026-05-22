@@ -81,7 +81,7 @@ foreach ($a in $args) {
 
 $argList = @($args)
 if (-not $hasName) {
-    $hostname = $env:COMPUTERNAME.ToLower()
+    $hostname = if ($env:CLAUDE_REMOTE_HOST) { $env:CLAUDE_REMOTE_HOST } else { $env:COMPUTERNAME.ToLower() }
     $dirname = Split-Path -Leaf (Get-Location).Path
     $argList = @('--name', "$hostname-$dirname") + $argList
 }
