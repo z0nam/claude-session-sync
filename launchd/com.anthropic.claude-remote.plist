@@ -18,6 +18,8 @@
     <key>ProgramArguments</key>
     <array>
         <string>/Users/YOUR_USERNAME/.local/bin/claude-remote</string>
+        <string>--spawn</string>
+        <string>worktree</string>
     </array>
 
     <key>EnvironmentVariables</key>
