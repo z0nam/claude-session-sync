@@ -222,3 +222,22 @@ that points the Claude app at this session.
   cmd file may be missing or pointing at the wrong .ps1. Re-run
   `windows\install-task.ps1`; it regenerates
   `%LOCALAPPDATA%\claude-remote\run.cmd` from scratch.
+
+## After switching accounts: restore Remote Control session names
+
+When you log in with a different account, every local session gets a new
+Remote Control session on the server and the app/mobile/web names fall back to
+auto-generated ones (`<host>-<adjective>-<noun>`). The names you set with
+`/rename` are still in the local session files; `bin/claude-rc-retitle`
+re-sends them.
+
+```sh
+bin/claude-rc-retitle                   # dry-run: list what would be sent
+bin/claude-rc-retitle --limit 1 --apply # try one session, check it in the app
+bin/claude-rc-retitle --apply           # send all
+```
+
+Run it yourself (it reads the OAuth token from the keychain; over SSH unlock it
+first with `security unlock-keychain`). Use the same `CLAUDE_CONFIG_DIR` as the
+account you want to fix. It stops at the first HTTP failure unless
+`--keep-going`.

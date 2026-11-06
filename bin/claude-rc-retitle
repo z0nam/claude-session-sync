@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""claude-rc-retitle — re-send local /rename titles to Remote Control sessions.
+
+Why: after switching accounts, each local session gets a NEW Remote Control
+(RC) session on the server, which is auto-named "<host>-<adj>-<noun>". The
+local title (a `custom-title` line in the session jsonl) is only uploaded when
+it *changes*, so the app/mobile/web names stay auto-generated.
+
+What it does: for every session jsonl it takes the last `customTitle` and the
+last `bridge-session` owned by the CURRENTLY logged-in organization, then
+PUTs {"title": ...} to /v1/code/sessions/<cse_id> (the same call the CLI makes).
+
+Safe by default: dry-run unless --apply. Never prints the token. Stops at the
+first HTTP failure unless --keep-going. Run it yourself (`! claude-rc-retitle`)
+because it reads the OAuth token from the keychain.
+
+Pick the account with CLAUDE_CONFIG_DIR (same as the claude CLI); default ~/.claude.
+Keychain service: "Claude Code-credentials" for the default dir; for a custom
+dir pass --keychain-service (it has a hash suffix) or rely on .credentials.json.
+"""
+import argparse
+import glob
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+API = "https://api.anthropic.com"
+
+
+def config_dir():
+    return os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
+
+
+def account_info(cdir):
+    # default dir keeps its state in ~/.claude.json, custom dirs inside the dir
+    cands = [os.path.join(cdir, ".claude.json")]
+    if os.path.realpath(cdir) == os.path.realpath(os.path.expanduser("~/.claude")):
+        cands.append(os.path.expanduser("~/.claude.json"))
+    for p in cands:
+        try:
+            with open(p, encoding="utf-8") as f:
+                acct = json.load(f).get("oauthAccount") or {}
+            if acct.get("organizationUuid"):
+                return acct["organizationUuid"], acct.get("accountUuid")
+        except (OSError, ValueError):
+            continue
+    sys.exit("로그인 계정 정보(oauthAccount)를 못 찾음. claude 로 로그인된 설정 폴더인지 확인.")
+
+
+def read_token(cdir, service):
+    blob = None
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            capture_output=True, text=True, timeout=20)
+        if out.returncode == 0 and out.stdout.strip():
+            blob = out.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if blob is None:
+        try:
+            with open(os.path.join(cdir, ".credentials.json"), encoding="utf-8") as f:
+                blob = f.read()
+        except OSError:
+            pass
+    if blob is None:
+        sys.exit("OAuth 토큰을 못 읽음 (키체인 잠김? SSH 세션이면 security unlock-keychain).")
+    try:
+        return json.loads(blob)["claudeAiOauth"]["accessToken"]
+    except (ValueError, KeyError):
+        sys.exit("자격증명 형식이 예상과 다름 (claudeAiOauth.accessToken 없음).")
+
+
+def scan(projects_dir, org, since_days):
+    cutoff = time.time() - since_days * 86400 if since_days else 0
+    for path in glob.glob(os.path.join(projects_dir, "*", "*.jsonl")):
+        try:
+            if os.path.getmtime(path) < cutoff:
+                continue
+        except OSError:
+            continue
+        title = None
+        cse = None
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    if '"custom-title"' in line:
+                        try:
+                            o = json.loads(line)
+                        except ValueError:
+                            continue
+                        if o.get("type") == "custom-title" and o.get("customTitle"):
+                            title = o["customTitle"]
+                    elif '"bridge-session"' in line:
+                        try:
+                            o = json.loads(line)
+                        except ValueError:
+                            continue
+                        if o.get("type") == "bridge-session" and o.get("ownerOrganizationUuid") == org:
+                            cse = o.get("bridgeSessionId")
+        except OSError:
+            continue
+        if title and cse:
+            yield os.path.basename(path)[:-6], title, cse
+
+
+def put_title(token, cse, title, device_token):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "ccr-byoc-2025-07-29",
+        "User-Agent": "claude-rc-retitle/0.1",
+    }
+    if device_token:
+        headers["X-Trusted-Device-Token"] = device_token
+    req = urllib.request.Request(
+        f"{API}/v1/code/sessions/{cse}", method="PUT",
+        data=json.dumps({"title": title}).encode(), headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, ""
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(300).decode("utf-8", "replace")
+    except urllib.error.URLError as e:
+        return 0, str(e.reason)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--apply", action="store_true", help="실제로 PUT (기본은 dry-run)")
+    ap.add_argument("--limit", type=int, default=0, help="처음 N건만 (시험용: --limit 1)")
+    ap.add_argument("--since-days", type=int, default=7, help="최근 N일 안에 수정된 세션만 (0=전부)")
+    ap.add_argument("--session", help="로컬 세션 id 접두어로 한 건만")
+    ap.add_argument("--keychain-service", default="Claude Code-credentials")
+    ap.add_argument("--keep-going", action="store_true", help="실패해도 계속")
+    a = ap.parse_args()
+
+    cdir = config_dir()
+    org, _acct = account_info(cdir)
+    rows = list(scan(os.path.join(cdir, "projects"), org, a.since_days))
+    if a.session:
+        rows = [r for r in rows if r[0].startswith(a.session)]
+    rows.sort()
+    if a.limit:
+        rows = rows[: a.limit]
+    print(f"대상 {len(rows)}건 (현재 로그인 조직 소속 RC 세션 + 로컬 이름이 둘 다 있는 세션)")
+    if not a.apply:
+        for sid, title, cse in rows:
+            print(f"  {sid[:8]} -> {cse[:10]}…  {title!r}")
+        print("dry-run 끝. 보내려면 --apply (먼저 --limit 1 --apply 로 한 건 시험 권장).")
+        return
+
+    token = read_token(cdir, a.keychain_service)
+    device = os.environ.get("CLAUDE_TRUSTED_DEVICE_TOKEN")
+    ok = fail = 0
+    for sid, title, cse in rows:
+        status, body = put_title(token, cse, title, device)
+        if status == 200:
+            ok += 1
+            print(f"  OK   {sid[:8]}")
+        else:
+            fail += 1
+            print(f"  FAIL {sid[:8]} HTTP {status} {body[:200]}")
+            if not a.keep_going:
+                print("첫 실패에서 중단 (--keep-going 으로 계속 가능).")
+                break
+        time.sleep(0.3)
+    print(f"완료: 성공 {ok}, 실패 {fail}")
+    sys.exit(1 if fail else 0)
+
+
+if __name__ == "__main__":
+    main()
