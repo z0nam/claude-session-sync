@@ -162,10 +162,10 @@ def main():
         status, body = put_title(token, cse, title, device)
         if status == 200:
             ok += 1
-            print(f"  OK   {sid[:8]}")
+            print(f"  OK   {sid[:8]}  -> {title!r}")
         else:
             fail += 1
-            print(f"  FAIL {sid[:8]} HTTP {status} {body[:200]}")
+            print(f"  FAIL {sid[:8]}  {title!r}  HTTP {status} {body[:200]}")
             if not a.keep_going:
                 print("첫 실패에서 중단 (--keep-going 으로 계속 가능).")
                 break
