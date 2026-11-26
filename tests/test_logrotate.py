@@ -94,6 +94,21 @@ class CopyTruncateTest(unittest.TestCase):
         with open(self.log, "rb") as f:
             self.assertEqual(f.read(), b"after\n")  # no sparse hole
 
+    def test_fd_path_skips_non_append_fd(self):
+        # plain `>file` redirection: offset would survive the truncate -> NUL hole
+        with open(self.log, "wb") as f:
+            self.assertIsNone(lr.fd_path(f.fileno()))
+
+    def test_archive_not_broader_than_source(self):
+        self.write_lines(1000)
+        os.chmod(self.log, 0o600)
+        old = os.umask(0o022)
+        try:
+            self.assertTrue(lr.copytruncate(self.log, 1_000))
+        finally:
+            os.umask(old)
+        self.assertEqual(os.stat(self.log + ".1").st_mode & 0o777, 0o600)
+
     def test_fd_path_resolves_regular_file_only(self):
         with open(self.log, "ab") as f:
             self.assertEqual(os.path.realpath(lr.fd_path(f.fileno())),

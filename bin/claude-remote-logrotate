@@ -29,8 +29,10 @@ Usage
   claude-remote-logrotate [--fd N]... [PATH]... [--watch-pid PID]
 
   --fd N         rotate whatever regular file fd N (inherited) points at.
-                 Non-regular fds (TTY, pipe, journald socket) are skipped.
-  PATH           rotate this file (one-shot cleanup by hand).
+                 Non-regular fds (TTY, pipe, journald socket) and fds
+                 without O_APPEND (plain `>file` redirection) are skipped.
+  PATH           rotate this file (one-shot cleanup by hand). Only for files
+                 whose writers use O_APPEND, such as launchd's log paths.
   --watch-pid    after the first pass, keep rotating every INTERVAL seconds
                  until PID exits (or this process gets re-parented).
 
@@ -73,15 +75,23 @@ def env_int(name, default):
 
 
 def fd_path(fd):
-    """Path of the regular file behind fd, or None (not open / not a regular file)."""
+    """Path of the regular file behind fd, or None when fd is not open, not a
+    regular file, or not opened with O_APPEND. Without O_APPEND the writer's
+    offset survives the truncate and its next write leaves a NUL-filled hole
+    (e.g. a plain `>out.log` redirection), so such fds are left alone."""
     try:
         st = os.fstat(fd)
     except OSError:
         return None
     if not stat.S_ISREG(st.st_mode):
         return None
+    import fcntl
+    try:
+        if not fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND:
+            return None
+    except OSError:
+        return None
     if sys.platform == "darwin":
-        import fcntl
         try:
             buf = fcntl.fcntl(fd, getattr(fcntl, "F_GETPATH", 50), b"\0" * 1024)
         except OSError:
@@ -98,14 +108,23 @@ def copytruncate(path, max_bytes):
     """If path is larger than max_bytes, copy its tail (max_bytes) to path.1 and
     truncate path to 0 in place. Returns True when it rotated. Raises OSError."""
     try:
-        size = os.path.getsize(path)
+        st = os.stat(path)
     except OSError:
         return False
+    size = st.st_size
     if size <= max_bytes:
         return False
     tmp = path + ".1.tmp"
+    mode = stat.S_IMODE(st.st_mode)
     try:
-        with open(path, "rb") as src, open(tmp, "wb") as dst:
+        try:
+            os.remove(tmp)  # leftover from a crash; don't inherit its mode
+        except FileNotFoundError:
+            pass
+        # Never broader than the source log (umask may narrow it further).
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        os.fchmod(fd, mode & ~current_umask())
+        with open(path, "rb") as src, os.fdopen(fd, "wb") as dst:
             src.seek(size - max_bytes)
             src.readline()  # drop the partial first line
             while True:
@@ -125,6 +144,12 @@ def copytruncate(path, max_bytes):
         f.truncate(0)
     os.replace(tmp, path + ".1")
     return True
+
+
+def current_umask():
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
 
 
 def rotate_all(targets, max_bytes):
