@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""claude-remote-logrotate: cap the size of the daemon's stdout/stderr log files.
+
+Why this exists
+---------------
+Under launchd, `claude remote-control` keeps repainting its status TUI
+("Continue coding in the Claude mobile app ... / space to show QR code") into
+StandardOutPath. stdout is not a TTY there, so every repaint is appended
+verbatim: ~200MB/day, 1.5GB after a week of uptime. `claude remote-control`
+has no quiet flag, so the launcher caps the files instead.
+
+How it rotates (copytruncate)
+-----------------------------
+When a file grows past MAX bytes, its last MAX bytes are copied to
+`<file>.1` (flush + fsync), and only then is the original truncated to 0
+*in place*. Only one generation (`.1`) is kept, so a file never takes more
+than ~2*MAX on disk.
+
+The file is never renamed: the daemon holds it open, and after a `mv` it would
+keep writing to the renamed file. In-place truncation is safe because launchd
+opens StandardOutPath/StandardErrorPath with O_APPEND (`lsof +fg -p <pid>`
+shows the `AP` flag on fd 1 and 2, checked 2026-11-26), so the next write
+after truncation lands at offset 0 instead of leaving a sparse hole.
+Known gap: a line written between the copy and the truncate can be lost.
+That is acceptable for a log.
+
+Usage
+-----
+  claude-remote-logrotate [--fd N]... [PATH]... [--watch-pid PID]
+
+  --fd N         rotate whatever regular file fd N (inherited) points at.
+                 Non-regular fds (TTY, pipe, journald socket) are skipped.
+  PATH           rotate this file (one-shot cleanup by hand).
+  --watch-pid    after the first pass, keep rotating every INTERVAL seconds
+                 until PID exits (or this process gets re-parented).
+
+Environment: CLAUDE_REMOTE_LOG_MAX_BYTES (default 10 MiB),
+CLAUDE_REMOTE_LOG_INTERVAL (seconds, default 600).
+
+Every failure is non-fatal: a one-line message on stderr, exit status 0.
+Rotation must never take the Remote Control daemon down with it.
+Stdlib only.
+"""
+import argparse
+import os
+import stat
+import sys
+import time
+
+DEFAULT_MAX_BYTES = 10 * 1024 * 1024
+DEFAULT_INTERVAL = 600
+POLL = 5  # seconds between liveness checks while waiting for the next pass
+
+
+def log(msg):
+    try:
+        sys.stderr.write("claude-remote-logrotate: %s\n" % msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def env_int(name, default):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        val = int(raw)
+    except ValueError:
+        log("ignoring %s=%r (not an integer)" % (name, raw))
+        return default
+    return val if val > 0 else default
+
+
+def fd_path(fd):
+    """Path of the regular file behind fd, or None (not open / not a regular file)."""
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        return None
+    if sys.platform == "darwin":
+        import fcntl
+        try:
+            buf = fcntl.fcntl(fd, getattr(fcntl, "F_GETPATH", 50), b"\0" * 1024)
+        except OSError:
+            return None
+        return buf.split(b"\0", 1)[0].decode("utf-8", "surrogateescape") or None
+    try:
+        path = os.readlink("/proc/self/fd/%d" % fd)
+    except OSError:
+        return None
+    return None if path.endswith(" (deleted)") else path
+
+
+def copytruncate(path, max_bytes):
+    """If path is larger than max_bytes, copy its tail (max_bytes) to path.1 and
+    truncate path to 0 in place. Returns True when it rotated. Raises OSError."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return False
+    if size <= max_bytes:
+        return False
+    tmp = path + ".1.tmp"
+    try:
+        with open(path, "rb") as src, open(tmp, "wb") as dst:
+            src.seek(size - max_bytes)
+            src.readline()  # drop the partial first line
+            while True:
+                buf = src.read(1 << 20)
+                if not buf:
+                    break
+                dst.write(buf)
+            dst.flush()
+            os.fsync(dst.fileno())
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    with open(path, "r+b") as f:  # truncate right after the copy is durable
+        f.truncate(0)
+    os.replace(tmp, path + ".1")
+    return True
+
+
+def rotate_all(targets, max_bytes):
+    """targets: list of ('fd', int) | ('path', str). Returns rotated paths."""
+    done = []
+    seen = set()
+    for kind, val in targets:
+        path = fd_path(val) if kind == "fd" else val
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        try:
+            if copytruncate(path, max_bytes):
+                done.append(path)
+        except OSError as e:
+            log("could not rotate %s: %s" % (path, e))
+    return done
+
+
+def alive(pid, parent):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    # Launched by claude-remote right before it execs, so PID is our parent.
+    # Re-parenting means PID is gone even if the number got recycled.
+    return parent is None or os.getppid() == parent
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="copytruncate claude-remote log files")
+    ap.add_argument("--fd", type=int, action="append", default=[])
+    ap.add_argument("--watch-pid", type=int)
+    ap.add_argument("paths", nargs="*")
+    args = ap.parse_args(argv)
+
+    max_bytes = env_int("CLAUDE_REMOTE_LOG_MAX_BYTES", DEFAULT_MAX_BYTES)
+    interval = env_int("CLAUDE_REMOTE_LOG_INTERVAL", DEFAULT_INTERVAL)
+    targets = [("fd", fd) for fd in args.fd] + [("path", p) for p in args.paths]
+
+    try:
+        rotate_all(targets, max_bytes)
+        if args.watch_pid is None:
+            return 0
+        parent = args.watch_pid if os.getppid() == args.watch_pid else None
+        next_run = time.monotonic() + interval
+        while alive(args.watch_pid, parent):
+            time.sleep(min(POLL, interval))
+            if time.monotonic() >= next_run:
+                rotate_all(targets, max_bytes)
+                next_run = time.monotonic() + interval
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:  # never fatal
+        log("unexpected error: %r" % (e,))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

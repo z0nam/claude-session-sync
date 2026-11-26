@@ -95,14 +95,34 @@ loginctl enable-linger "$USER"
 systemctl --user disable --now claude-remote.service
 rm ~/.config/systemd/user/claude-remote.service
 systemctl --user daemon-reload
-rm ~/.local/bin/claude-remote ~/.config/claude-remote.env
+rm ~/.local/bin/claude-remote ~/.local/bin/claude-remote-logrotate ~/.config/claude-remote.env
 ```
+
+### Log size (macOS)
+
+Under launchd, stdout is a plain file and `claude remote-control` repaints its
+status screen into it forever (about 200MB/day; there is no quiet flag). The
+launcher therefore starts `claude-remote-logrotate` in the background whenever
+stdout or stderr is a regular file. It copies the last 10 MiB to `<log>.1` and
+truncates the log in place (copytruncate, one generation kept) at startup and
+every 10 minutes, and exits when the daemon does. The file is never renamed,
+because launchd keeps it open with O_APPEND. Tunables, all set in the env file
+or in the plist's `EnvironmentVariables`:
+
+- `CLAUDE_REMOTE_LOG_MAX_BYTES`: size cap per file (default 10485760)
+- `CLAUDE_REMOTE_LOG_INTERVAL`: seconds between checks (default 600)
+- `CLAUDE_REMOTE_LOG_ROTATE=0`: turn it off
+
+The launcher change takes effect when the daemon restarts. To trim an existing
+oversized log without restarting, run
+`claude-remote-logrotate ~/Library/Logs/claude-remote.out.log` once.
+Interactive runs (TTY) and systemd (journald) are unaffected.
 
 ## macOS
 
 ```bash
-# 1. Install the launcher
-install -m 0755 bin/claude-remote ~/.local/bin/claude-remote
+# 1. Install the launcher (and the log rotator it starts; keep them side by side)
+install -m 0755 bin/claude-remote bin/claude-remote-logrotate ~/.local/bin/
 
 # 2. Configure defaults
 mkdir -p ~/.config

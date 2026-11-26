@@ -56,4 +56,27 @@ if [ "$has_name" -eq 0 ]; then
     set -- --name "${host}-${dirname}" "$@"
 fi
 
+# Cap the daemon's log files. Under launchd, stdout/stderr are regular files
+# (StandardOutPath) and the status TUI repaints into them forever (~200MB/day).
+# Start a background copytruncate watcher that rotates them now and every
+# CLAUDE_REMOTE_LOG_INTERVAL seconds until the process we exec into exits.
+# $$ survives the exec, so the watcher follows `claude remote-control` itself.
+# Interactive runs (TTY), systemd (journald) and pipes are skipped by the
+# watcher's regular-file check. Set CLAUDE_REMOTE_LOG_ROTATE=0 to disable.
+if [ "${CLAUDE_REMOTE_LOG_ROTATE:-1}" != "0" ] && { [ -f /dev/stdout ] || [ -f /dev/stderr ]; } \
+    && command -v python3 >/dev/null 2>&1; then
+    self="$0"
+    while [ -L "$self" ]; do
+        link="$(readlink "$self")"
+        case "$link" in
+            /*) self="$link" ;;
+            *) self="$(dirname "$self")/$link" ;;
+        esac
+    done
+    rotator="$(dirname "$self")/claude-remote-logrotate"
+    if [ -f "$rotator" ]; then
+        python3 "$rotator" --fd 1 --fd 2 --watch-pid "$$" </dev/null &
+    fi
+fi
+
 exec "$CLAUDE_BIN" remote-control "$@"

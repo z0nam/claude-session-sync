@@ -54,6 +54,12 @@ a separate tool, not in this repo.
 - `bin/claude-remote` — bash launcher around `claude remote-control`.
   Sanity-checks the install, picks a sensible default session name, sources
   `~/.config/claude-remote.env` if present, then `exec`s the real subcommand.
+  Just before the exec it starts `bin/claude-remote-logrotate` in the
+  background when stdout/stderr are regular files (launchd), so the TUI
+  repaint spam can't grow the log without bound.
+- `bin/claude-remote-logrotate` — stdlib Python copytruncate helper (10 MiB
+  cap, one `.1` generation, non-fatal). Never `mv` the log: launchd holds it
+  open with O_APPEND. Tests: `python3 -m unittest discover -s tests`.
 - `bin/claude-remote.ps1` — PowerShell port of the same launcher for native
   Windows. Reads the same env file (POSIX `$HOME` and Windows `%VAR%` style
   both expanded). Targets PowerShell 5.1+ so it runs on stock Windows 10/11
